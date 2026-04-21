@@ -21,3 +21,6 @@ O sistema de consultas opera da seguinte forma:
 *   O arquivo `README.md` contém as instruções de uso do projeto.
 *   O arquivo `CLAW.md` contém as instruções de uso do projeto CLAW.
 *   O arquivo `PARITY.md` contém as instruções de uso do projeto PARITY.
+
+## Operação
+O sistema de consultas é operado por um time de desenvolvedores que trabalham em conjunto para manter e melhorar o projeto.
