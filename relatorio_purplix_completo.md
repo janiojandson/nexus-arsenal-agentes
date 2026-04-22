@@ -1,66 +1,72 @@
-# Relatório Técnico Completo: FOREX-TRADING-BOT
+# Relatório Técnico - FOREX-TRADING-BOT
 
-## Visão Geral do Sistema
-O FOREX-TRADING-BOT é um sistema automatizado de negociação de câmbio (Forex) que utiliza inteligência artificial para analisar dados de mercado, gerar previsões e apoiar decisões de trading. O bot foca principalmente no par EUR/USD, mas pode ser adaptado para outros pares.
+## Visão Geral
+O FOREX-TRADING-BOT é um sistema automatizado de negociação no mercado Forex que utiliza aprendizado de máquina para gerar previsões de curto prazo (5, 10, 15, 20 e 30 minutos) para o par EUR/USD. O projeto combina coleta de dados via MetaTrader5, engenharia de características, treinamento de modelos LightGBM e salvamento dos modelos para uso posterior em predições.
 
 ## Arquitetura do Sistema
-O sistema é composto por vários módulos Python organizados em diretórios:
-- **PY_FILES**: Contém os scripts principais de processamento, predição e backtesting.
-- **CSV_FILES**: Armazena datasets históricos de câmbio obtidos do MetaTrader5 ou outras fontes.
-- **ALL_MODELS**: Diretório onde os modelos treinados são salvos em formato pickle.
-- **catboost_info**: Contém arquivos de release e informações adicionais.
+- **Diretórios principais:**
+  - `CSV_FILES/` – armazena datasets históricos baixados da MetaTrader5.
+  - `PY_FILES/` – contém scripts Python responsáveis por coleta, pré-processamento, treinamento e predição.
+  - `ALL_MODELS/` – diretório onde os modelos treinados são salvos no formato joblib.
+  - `catboost_info/` – parece conter arquivos de distribuição (ex.: ZIP do bot).
+- **Scripts críticos:**
+  - `Get_dataMT5.py` – baixa dados históricos da MetaTrader5 e grava em CSV.
+  - `ALL_PROCESS.py` – lê os CSV, aplica features, cria targets, treina modelos LightGBM e salva-os.
+  - `func.py` – contém funções auxiliares como `apply_features`, `create_targets`, `drop_duplicate` e a constante `SYMBOL`.
+  - `Preprocessing.py`, `ALL_BACKTEST.py`, `PRED_NEXT.py`, `ALL_PRED_NXT.py` – outros componentes para backtesting e geração de predições.
 
-### Principais Scripts
-- **ALL_PROCESS.py**: Script principal para treinamento de modelos. Lê dados históricos, aplica features, cria targets, treina modelos LightGBM para diferentes horizontes de tempo (5M, 10M, 15M, 20M, 30M) e salva os modelos.
-- **func.py**: Contém funções auxiliares para feature engineering, incluindo cálculo de indicadores técnicos (EMA, MACD, Bollinger Bands, RSI, etc.) e criação de targets.
-- **ALL_BACKTEST.py**: Provavelmente usado para backtesting de estratégias (não analisado em detalhe, mas presente).
-- **Get_dataMT5.py e Get_dataYF.py**: Scripts para obtenção de dados do MetaTrader5 e Yahoo Finance.
-- **Preprocessing.py**: Script de pré-processamento de dados.
-- **Load_model.py e PRED_NEXT.py**: Para carregar modelos treinados e fazer previsões.
+## Lógica de Trading
+1. **Coleta de Dados** (`Get_dataMT5.py`):
+   - Conecta-se à MetaTrader5.
+   - Baixa dados de preços (OHLCV) para o símbolo definido em `func.SYMBOL` (padrão EUR/USD) em intervalos de 5 minutos.
+   - Os dados são salvos em `CSV_FILES/MT5_5M_<SYMBOL>_Exchange_Rate_Dataset.csv`.
 
-## Lógica de Trading Específica
-A lógica de trading do bot baseia-se em:
-1. **Coleta de Dados**: Dados históricos de preços (OHLCV) são coletados via MetaTrader5 ou Yahoo Finance e armazenados em CSV_FILES.
-2. **Feature Engineering**: Utilizando a biblioteca `ta` (technical analysis), são calculados diversos indicadores técnicos:
-   - Médias Móveis Exponenciais (EMA 20, 50, 200)
-   - MACD, Bollinger Bands, ATR, RSI, Stochastic Oscillator
-   - VWAP, características de candle (corpo, range)
-   - Retornos logarítmicos, volatilidade rolling, volume spike, etc.
-3. **Criação de Targets**: São criadas colunas de target para diferentes horizontes de tempo (T_5M, T_10M, T_15M, T_20M, T_30M), provavelmente indicando a direção ou magnitude do movimento de preço futuro.
-4. **Treinamento de Modelo**: Para cada target, é treinado um classificador LightGBM (LGBMClassifier) usando as 76 features mais importantes (selecionadas por importância de features). O modelo é salvo em disco junto com a lista de features usadas.
-5. **Predição**: Em tempo real (ou em backtesting), o modelo carrega as features mais recentes, aplica as mesmas transformações e gera uma previsão para o próximo candle.
+2. **Pré-processamento e Feature Engineering** (`func.apply_features`):
+   - Calcula indicadores técnicos usando a biblioteca `ta` (ex.: médias móveis, RSI, MACD, Bollinger Bands).
+   - Gera características derivadas que alimentam os modelos.
 
-## Ferramentas e Bibliotecas Utilizadas
-Conforme `requirements.txt`:
-- **numpy**: Computação numérica
-- **pandas**: Manipulação de dados
-- **scikit-learn**: Utilitários de machine learning (possivelmente para métricas)
-- **lightgbm**: Biblioteca de gradient boosting usada para os modelos de predição
-- **catboost**: Alternativa de boosting (possivelmente usada em outras partes ou para comparação)
-- **joblib**: Serialização de modelos Python
-- **ta**: Biblioteca de análise técnica para cálculo de indicadores
-- **MetaTrader5**: Interface para conexão com a plataforma MetaTrader5 para obtenção de dados e possivelmente execução de trades
+3. **Criação de Targets** (`func.create_targets`):
+   - Define variáveis alvo `T_5M`, `T_10M`, `T_15M`, `T_20M`, `T_30M` que representam a direção ou magnitude da variação de preço nos próximos 5, 10, 15, 20 e 30 minutos.
 
-## Fluxo de Funcionamento
-1. **Inicialização**: O usuário configura o par de moedas, timeframe e outras preferências via interface (não analisada, mas mencionada no README).
-2. **Obtenção de Dados**: Scripts como `Get_dataMT5.py` baixam dados históricos e os salvam em `CSV_FILES/`.
-3. **Pré-processamento**: `Preprocessing.py` pode limpar e formatar os dados.
-4. **Feature Engineering e Treinamento**: `ALL_PROCESS.py` lê os dados, aplica `apply_features` (de `func.py`) para gerar indicadores, cria targets com `create_targets`, seleciona as top 76 features por importância, treina modelos LightGBM para cada horizonte e salva em `ALL_MODELS/`.
-5. **Predição**: Em operação, `PRED_NEXT.py` (ou similar) carrega o modelo adequado, calcula as features para os dados mais recentes e gera uma previsão de direção ou magnitude do próximo movimento.
-6. **Backtesting**: `ALL_BACKTEST.py` permite testar estratégias usando dados históricos e os modelos treinados.
-7. **Execução de Trades**: Embora não explicitamente mostrado nos arquivos analisados, o bot provavelmente integra com MetaTrader5 para enviar ordens com base nas previsões.
+4. **Treinamento de Modelos** (`ALL_PROCESS.py`):
+   - Lê o dataset completo.
+   - Aplica `apply_features` e `create_targets`.
+   - Remove linhas com NaN.
+   - Para cada target:
+     - Treina um `LGBMClassifier` (200 estimadores, random_state=42) usando todas as features.
+     - Calcula importância das features e seleciona as top 76.
+     - Re-treina o modelo usando apenas as top 76 features.
+     - Salva um dicionário contendo o modelo e a lista de features em `ALL_MODELS/<SYMBOL>_lgbm_<target>.pkl`.
 
-## Detalhes de Implementação
-- **Seleção de Features**: Após o treinamento inicial do LightGBM, as 76 features mais importantes são selecionadas para reduzir overfitting e melhorar generalização.
-- **Salvamento de Modelos**: Cada modelo é salvo como um dicionário contendo o objeto modelo e a lista de features, usando `joblib.dump`.
-- **Uso de Indicadores Técnicos**: A biblioteca `ta` é amplamente utilizada para gerar características que capturam tendências, momentum, volatilidade e volume.
-- **Horizontes de Múltiplos Timeframes**: O bot treina modelos separados para prever movimentos em 5, 10, 15, 20 e 30 minutos, permitindo ao usuário escolher o horizonte alinhado à sua estratégia.
+5. **Predição** (scripts como `PRED_NEXT.py`):
+   - Carrega o modelo joblib correspondente ao horizon desejado.
+   - Aplica as mesmas features aos dados mais recentes.
+   - Gera previsões de direção/preço para o próximo intervalo.
 
-## Observações e Possíveis Melhorias
-- O script `func.py` contém uma chamada a `info_init()` que tenta buscar dados de um URL Firebase; isso pode falhar se o serviço não estiver disponível, mas parece ser apenas para logging/informação.
-- O uso de `mplfinance` em `ALL_PROCESS.py` sugere que há geração de gráficos para visualização (possivelmente para depuração ou relatórios).
-- O sistema atualmente foca em classificação (direção do movimento), mas poderia ser estendido para regressão (magnitude do movimento) ou incorporar gestão de risco e tamanho de posição.
-- A dependência do MetaTrader5 limita a execução a ambientes Windows (a menos que se use Wine), embora a obtenção de dados via Yahoo Finance ofereça alternativa multiplataforma.
+## Ferramentas Utilizadas
+- **Linguagem:** Python 3.7+
+- **Bibliotecas principais:**
+  - `numpy`, `pandas` – manipulação de dados.
+  - `scikit-learn` – utilitários (embora não usado diretamente, está presente).
+  - `lightgbm` – algoritmo de gradient boosting para classificação.
+  - `catboost` – outra opção de boosting (possivelmente usada em outros scripts).
+  - `joblib` – serialização de modelos.
+  - `ta` – indicadores técnicos.
+  - `MetaTrader5` – interface com a plataforma de corretagem.
+  - `mplfinance` – plotagem de gráficos financeiros (possivelmente usada para visualização).
+- **Outros:** `datetime` para chunking de downloads.
+
+## Fluxo de Funcionamento (Resumo)
+1. Executar `Get_dataMT5.py` → baixa/atualiza o CSV histórico.
+2. Executar `ALL_PROCESS.py` → gera features, targets, treina e salva modelos para cada horizonte temporal.
+3. Para operar em tempo real, usar scripts de predição (ex.: `PRED_NEXT.py`) que carregam o modelo adequado e produzem sinais de compra/venda.
+4. Os modelos podem ser re-treinados periodicamente para incorporar novos dados.
+
+## Observações
+- O projeto foca em previsões de direção de curto prazo, adequado para estratégias de scalping ou day trading.
+- A escolha de 76 features top parece ser um equilíbrio entre desempenho e sobreajuste.
+- A modularidade (funções em `func.py`) facilita reutilização e manutenção.
+- A dependência da MetaTrader5 implica que o robô precisa ser executado em ambiente com acesso à plataforma (geralmente Windows).
 
 ## Conclusão
-O FOREX-TRADING-BOT representa uma abordagem estruturada para aplicar machine learning no trading de Forex, combinando análise técnica tradicional com modelos de gradient boosting. Sua arquitetura modular permite fácil experimentação com diferentes features, horizontes de tempo e algoritmos. O relatório técnico fornece uma base para compreensão, manutenção e extensão do sistema por desenvolvedores e traders interessados em sistemas automatizados de trading.
+O FOREX-TRADING-BOT apresenta uma arquitetura clara e bem dividida, aproveitando bibliotecas de ML estabelecidas para gerar modelos preditivos baseados em indicadores técnicos. Sua estrutura permite fácil extensão (adicionar novos indicadores, outros símbolos ou diferentes horizontes de tempo) e manutenção.
