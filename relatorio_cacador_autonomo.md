@@ -1,216 +1,268 @@
-# 📋 RELATÓRIO EXECUTIVO — CAÇADOR AUTÔNOMO NEXUS
+# 🎯 RELATÓRIO DO CAÇADOR AUTÓNOMO
 
-## Projeto Descoberto: **ARIA — AI-driven Real-time Investment Agent**
-**Repositório:** `loopotv/aria-trading` | **Licença:** MIT | **Linguagem:** TypeScript
+**Data:** 2026-04-27
+**Operação:** Caçador Autónomo — Modo Background
+**Operário:** Nexus Execution Worker
 
 ---
 
 ## 1. RESUMO EXECUTIVO
 
-O ARIA é um **bot de trading crypto autônomo** alimentado por múltiplos LLMs, rodando inteiramente no **Cloudflare Workers com custo de hospedagem $0**. É o projeto com maior potencial de lucro recorrente e autonomia operacional encontrado entre 3 candidatos analisados:
+Projeto identificado com **MAIOR potencial de lucro autónomo**: **CloddsBot** (alsk1992/CloddsBot).
 
-| Critério | ARIA (Selecionado) | Trade-AI | Crypto_bot |
-|---|---|---|---|
-| Custo operacional | **$0 (Workers free tier)** | Servidor VPS necessário | Servidor VPS necessário |
-| Linguagem | **TypeScript** (alinhado ao ecossistema) | Python | Python |
-| Estratégia | **Multi-LLM + Market-Neutral + Event-Driven** | Single LLM | Indicadores técnicos |
-| Autonomia | **Total (cron a cada 5min)** | Parcial | Parcial |
-| Memória/Aprendizado | **Experience DB (D1)** | Nenhuma | Nenhuma |
-| Interface | **Telegram interativo** | Telegram básico | Nenhum |
-| Backtesting | **Completo com runner dedicado** | Limitado | Nenhum |
-| Gestão de Risco | **5 regimes de mercado + ATR SL/TP** | Básico | 1% por trade |
+| Métrica | Valor |
+|---------|-------|
+| ⭐ Stars | 192 |
+| 📦 Clones (14d) | 10.746 |
+| 📅 Último update | 2026-04-25 |
+| 📜 Licença | MIT |
+| 🛠️ Skills | 119+ |
+| 🏪 Mercados | 1000+ |
+| 💬 Canais | 21 plataformas |
+| 🤖 Base | Claude (Anthropic SDK) |
+| ⛓️ Chains | Solana + 5 EVM chains |
+| 📦 NPM | `clodds` v1.8.0 |
 
----
-
-## 2. ARQUITETURA DO ARIA (Extraída)
-
-```
-Pipeline: Notícias → LLM Sensor → Filtro Quant → Gestão de Risco → Ordem
-
-┌─────────────────┐    ┌──────────────┐    ┌─────────────────┐
-│  News Sources    │    │ Fear & Greed │    │ Exchange Data   │
-│  (CryptoPanic,   │    │    Index     │    │   (OHLCV)       │
-│   RSS feeds)     │    └──────┬───────┘    └────────┬────────┘
-└────────┬─────────┘           │                      │
-         ▼                     ▼                      │
-┌──────────────────────────────────────┐              │
-│       Event Collector                │              │
-│  (classify impact: HIGH/NORMAL)      │              │
-└──────────┬──────────────┬────────────┘              │
-           │              │                            │
-    HIGH impact     NORMAL impact                      │
-           ▼              ▼                            │
-┌─────────────────┐ ┌──────────────────┐              │
-│  LLM Sensor     │ │  Batch LLM       │              │
-│  (Kimi K2)      │ │  (Llama 4 Scout) │              │
-└────────┬────────┘ └────────┬─────────┘              │
-         ▼                   ▼                         │
-┌──────────────────────────────────────┐              │
-│     Sentiment Aggregator              │              │
-│  (composite score, ranking)           │              │
-└──────────────────┬───────────────────┘              │
-                   ▼                                  ▼
-         ┌─────────────────────────────────────────────┐
-         │         Quant Filter + Regime Detector       │
-         │  RSI, ADX, ATR, Volume, EMA + 5 regimes      │
-         └──────────────────┬──────────────────────────┘
-                           ▼
-         ┌─────────────────────────────────────────────┐
-         │         Risk Manager                         │
-         │  Position sizing, leverage, SL/TP            │
-         └──────────────────┬──────────────────────────┘
-                           ▼
-         ┌─────────────────────────────────────────────┐
-         │    Exchange (Hyperliquid / Binance)          │
-         │    Soft Orders + Software SL/TP Safety Net  │
-         └─────────────────────────────────────────────┘
-```
-
-### Componentes Críticos Extraídos:
-
-| Arquivo | Função | Linhas |
-|---|---|---|
-| `src/index.ts` | Entry point Hono + Cron triggers (5min + diário) | ~500 |
-| `src/trading/engine.ts` | Motor principal — orquestra todo o pipeline | ~1100 |
-| `src/trading/risk.ts` | Position sizing baseado em SL distance + RiskManager | ~100 |
-| `src/trading/regime.ts` | Detector de 5 regimes de mercado (Fear/Greed + BTC) | ~120 |
-| `src/trading/strategies/event-driven.ts` | Estratégia de notícias em tempo real (5 gates) | ~150 |
-| `src/trading/strategies/market-neutral-filter.ts` | Filtro quant para sinais de sentimento | ~130 |
-| `src/sentiment/llm-sensor.ts` | Classificador LLM — extrai asset, score, confidence | ~250 |
-| `src/trading/experience.ts` | Experience DB — auto-aprendizado com D1 | ~100 |
-| `src/trading/audit.ts` | Auditoria automática (ghost trades, orphans) | ~100 |
-| `schema.sql` | 8 tabelas D1 (trades, signals, sentiment, experience, etc.) | ~200 |
+**Veredicto:** Projeto de produção real, não é PoC. 10.7k clones em 14 dias demonstra tração massiva. Arquitetura modular com 80+ módulos permite adaptação cirúrgica.
 
 ---
 
-## 3. LÓGICA DE NEGÓCIO EXTRAÍDA
+## 2. PROJETOS ANALISADOS (Ranking)
 
-### 3.1 Pipeline de Trading (5 Gates de Segurança)
-1. **Gate 1 — Magnitude:** `signal.magnitude >= 0.5` (eventos fracos rejeitados)
-2. **Gate 2 — Confiança:** `signal.confidence >= 0.7` (LLM incerto rejeitado)
-3. **Gate 3 — Direção:** `|sentimentScore| >= 0.3` (neutros rejeitados)
-4. **Gate 4 — RSI:** Long rejeitado se RSI > 75; Short rejeitado se RSI < 25
-5. **Gate 5 — Preço já moveu:** Rejeita se preço moveu >6% em 3 candles
-
-### 3.2 Detector de Regime de Mercado (5 Estados)
-| Regime | Fear/Greed | Long Bias | Short Bias | Alavancagem | Max Positions |
-|---|---|---|---|---|---|
-| EXTREME_FEAR | ≤25 | 0.3 | 1.8 | 0.5x | 4 |
-| RISK_OFF | <40 + BTC<-2% | 0.5 | 1.5 | 0.5x | 5 |
-| NEUTRAL | 40-55 | 1.0 | 1.0 | 1.0x | 8 |
-| RISK_ON | >55 + BTC>+2% | 1.5 | 0.5 | 1.5x | 8 |
-| EXTREME_GREED | ≥75 | 0.5 | 1.5 | 0.8x | 6 |
-
-### 3.3 Gestão de Risco
-- **Position Sizing:** `riskAmount / (priceDiff / entryPrice)` — arrisca % fixa do balanço
-- **Stop-Loss:** ATR × slMultiplier (adaptado ao regime)
-- **Take-Profit:** ATR × tpMultiplier (adaptado ao regime)
-- **Soft Orders:** Mapa em memória com timeout forçado
-- **Safety Net:** Software SL/TP como rede de segurança
-
-### 3.4 Multi-LLM Pipeline
-- **Llama 4 Scout** (Cloudflare Workers AI — GRÁTIS): Classificação batch de notícias
-- **Kimi K2**: Raciocínio estratégico de trades
-- **Claude**: Análise profunda quando necessário
-
-### 3.5 Experience Database (Auto-Aprendizado)
-- Regista cada trade com contexto, resultado e padrões
-- Consulta histórico antes de cada decisão
-- Identifica padrões recorrentes de sucesso/fracasso
+| # | Projeto | ⭐ | Potencial | Veredicto |
+|---|---------|-----|-----------|-----------|
+| 1 | **CloddsBot** | 192 | 🔥🔥🔥🔥🔥 | **SELECIONADO** — Produção real, ACP, 1000+ mercados |
+| 2 | autonomous-ai-trading-agent-llama3 | 35 | 🔥🔥🔥 | Bom mas limitado a Llama3 local, sem ACP |
+| 3 | k.i.t.-bot | 4 | 🔥🔥 | Framework genérico, sem tração |
+| 4 | aria-trading | 2 | 🔥🔥 | Cloudflare Workers (interessante), mas imaturo |
+| 5 | Limitless-AI | 1 | 🔥 | Frontend quebrado, não é viável |
 
 ---
 
-## 4. CRUZAMENTO COM ECOSSISTEMA INTERNO (PASSO 6)
+## 3. ANÁLISE PROFUNDA — CloddsBot
 
-### Ferramentas do `janiojandson/janiojandson` reaproveitáveis:
-
-| Ferramenta Interna | Uso no Clone ARIA |
-|---|---|
-| `BashTool` | Execução de scripts de deploy e backtesting |
-| `WebFetchTool` | Substitui fetch manual para APIs de notícias |
-| `WebSearchTool` | Busca de notícias crypto em tempo real |
-| `ScheduleCronTool` | Orquestração de crons (substitui wrangler cron) |
-| `TaskCreateTool/TaskGetTool` | Gestão de tarefas de trading assíncronas |
-| `SendMessageTool` | Notificações (substitui Telegram em fase inicial) |
-| `FileReadTool/FileWriteTool` | Persistência de configuração e logs |
-| `MCPTool` | Integração com exchanges via MCP |
-| `AgentTool` | Delegação de subtarefas entre agentes |
-| `GrepTool/GlobTool` | Análise de logs e padrões |
-| `ConfigTool` | Gestão de configuração dinâmica |
-| `SkillTool` | Carregamento de estratégias como skills |
-
-### Arquitetura de Adaptação:
+### 3.1 Arquitetura Core
 
 ```
-ARIA Original (Cloudflare Workers)     →    Clone Nexus (Ecossistema Interno)
-─────────────────────────────────────       ──────────────────────────────────
-Cloudflare Workers (serverless)        →    Railway (deploy com lancar_no_railway)
-Wrangler Cron (5 min)                  →    ScheduleCronTool
-Hono HTTP Framework                    →    Hono (mantido — funciona em Node.js)
-Cloudflare Workers AI (Llama 4)        →    OpenRouter / Groq (LLM gratuito)
-Cloudflare D1 (SQLite)                 →    SQLite via Turso ou Railway Postgres
-Cloudflare KV                          →    Redis ou arquivo JSON persistente
-Hyperliquid SDK custom                 →    CCXT (padrão multi-exchange)
-Telegram Bot                           →    SendMessageTool + Telegram Bot (fase 2)
+CloddsBot/
+├── src/
+│   ├── acp/              ← Agent Commerce Protocol (DIFERENCIAL CHAVE)
+│   │   ├── agreement.ts  ← Contratos entre agentes
+│   │   ├── discovery.ts  ← Descoberta de agentes
+│   │   ├── escrow.ts     ← Pagamentos com garantia
+│   │   ├── identity.ts   ← Identidade descentralizada
+│   │   ├── predictions.ts ← Mercado de predições entre agentes
+│   │   └── registry.ts   ← Registo de agentes
+│   ├── agents/           ← Orquestração de subagentes
+│   │   ├── subagents.ts  ← Sessões persistentes, background exec, cost tracking
+│   │   └── tool-registry.ts
+│   ├── trading/          ← Motor de trading
+│   │   ├── orchestrator.ts ← Gatekeeper central com safety checks
+│   │   ├── kelly.ts      ← Kelly Criterion dinâmico (anti-martingale)
+│   │   ├── safety.ts     ← Kill switch, drawdown, concentração
+│   │   └── bots/         ← DCA, copy-trading, market-making
+│   ├── risk/             ← Motor de risco unificado
+│   │   ├── engine.ts     ← 10 checks pré-trade (VaR, stress, vol)
+│   │   ├── circuit-breaker.ts
+│   │   ├── var.ts        ← Value at Risk
+│   │   ├── stress.ts     ← Stress testing
+│   │   └── volatility.ts ← Detecção de regime de volatilidade
+│   ├── strategies/       ← Estratégias HFT
+│   ├── exchanges/        ← 10+ exchanges integradas
+│   ├── solana/           ← Jupiter, Pump.fun, Raydium, Orca
+│   ├── evm/              ← Uniswap V3, 1inch, Virtuals
+│   └── ... (80+ módulos)
+```
+
+### 3.2 Diferenciais Competitivos
+
+1. **Agent Commerce Protocol (ACP):** Sistema completo de pagamentos entre agentes com escrow, contratos e identidade. ÚNICO no mercado. Permite que agentes comprem/vendam sinais e serviços entre si.
+
+2. **Kelly Criterion Dinâmico:** Não é Kelly estático. Adapta-se com:
+   - Anti-martingale (reduz após perdas, aumenta após ganhos)
+   - Scaling por volatilidade
+   - Multipliers por categoria
+   - Drawdown-adjusted sizing
+
+3. **Risk Engine Unificado (10 checks):**
+   - Kill switch → Circuit breaker → Max order size → Exposure limits
+   - Daily loss → Max drawdown → Concentration → VaR → Volatility regime → Kelly sizing
+
+4. **Subagentes com Persistência:** Sessões que sobrevivem a restarts, execução em background, cost tracking por run, error classification com auto-retry.
+
+5. **Trading Orchestrator:** Gatekeeper central que NUNCA permite bypass de safety checks. Todas as ordens passam pelo orchestrator.
+
+### 3.3 Stack Tecnológico
+
+- **Runtime:** Node.js ≥22, TypeScript 5.3
+- **AI:** Anthropic SDK (Claude), embeddings com Xenova/transformers
+- **Blockchain:** @coral-xyz/anchor (Solana), @jup-ag (Jupiter), @drift-labs/sdk
+- **DeFi:** Kamino, Meteora DLMM, Raydium, Orca
+- **Exchanges:** CCXT (100+ exchanges), Binance, Bybit, Hyperliquid
+- **Infra:** Docker, Tailscale VPN, SQLite/PostgreSQL
+
+---
+
+## 4. CRUZAMENTO — Dados Externos × Ferramentas Internas
+
+### 4.1 O que temos (nexus-arsenal-agentes)
+
+| Recurso | Estado |
+|---------|--------|
+| Estudo de Viabilidade Master | ✅ Completo — Arquitetura Nexus definida |
+| Relatórios de referência | ✅ Claude Leak, TauricResearch, Opselon, Purplix |
+| Backend com routes | ✅ Estrutura base existente |
+| Docs/audit | ✅ Checkpoints operacionais |
+| Relatório TraderAlice | ✅ Análise anterior |
+
+### 4.2 O que o CloddsBot traz de NOVO
+
+| Capacidade | Gap Preenchido |
+|------------|---------------|
+| ACP (Agent Commerce Protocol) | **Crítico** — Nexus não tinha protocolo de pagamentos entre agentes |
+| Kelly Criterion Dinâmico | **Alto** — Nexus tinha gestão de risco mas não sizing adaptativo |
+| Risk Engine 10-check | **Alto** — Nexus tinha risk mas não unificado com VaR + stress |
+| Subagentes persistentes | **Médio** — Nexus tinha orquestração mas não persistência de sessão |
+| 1000+ mercados integrados | **Alto** — Nexus não tinha cobertura de mercado |
+| 21 canais de messaging | **Médio** — Nexus não tinha interface de chat |
+
+### 4.3 Matriz de Adaptação
+
+```
+CLODDSBOT                    →  NEXUS ADAPTADO
+─────────────────────────────────────────────────
+ACP (escrow, contracts)      →  NexusACP — Protocolo de comércio entre agentes
+Kelly Dinâmico               →  NexusKelly — Sizing adaptativo com drawdown
+Risk Engine 10-check         →  NexusRisk — Motor unificado com VaR + stress
+Subagentes persistentes      →  NexusAgents — Sessões com state recovery
+Trading Orchestrator         →  NexusOrchestrator — Gatekeeper central
+Exchanges adapters           →  NexusExchanges — Camada de abstração
 ```
 
 ---
 
-## 5. VIABILIDADE DE LUCRO
+## 5. ARQUITETURA PROPOSTA — Nexus v2 (Baseada em CloddsBot)
 
-### Modelo de Receita: **Trading Autônomo + SaaS White-Label**
-
-| Fonte | Estimativa Mensal | Esforço |
-|---|---|---|
-| Trading autônomo (próprio capital) | $200-$2.000+ (depende do capital) | Zero — bot opera sozinho |
-| SaaS White-Label (alugar o bot) | $50/mês × N usuários | Médio — UI de gestão |
-| Sinais Telegram Premium | $30/mês × N assinantes | Baixo — retransmitir sinais |
-| Consultoria de setup | $500 one-time × N clientes | Baixo — documentar processo |
-
-### Custos Operacionais:
-- **Hospedagem:** $0 (Railway free tier ou Cloudflare Workers)
-- **LLM Inference:** $0 (Workers AI free tier ou Groq free tier)
-- **Exchange APIs:** $0 (Hyperliquid/Binance APIs gratuitas)
-- **Total:** **$0/mês** para operar
-
-### ROI Projetado:
-- Com $100 de capital inicial e alavancagem 5x: exposição de $500
-- Meta conservadora: 2-5% ao mês = $2-$25/mês (reinvestível)
-- Com $1.000 de capital: $20-$250/mês
-- **Break-even: Dia 1** (custo operacional = $0)
-
----
-
-## 6. PRÓXIMOS PASSOS DE CODIFICAÇÃO
-
-### Fase 1 — Clone Mínimo Viável (3-5 dias)
-1. **Adaptar `src/index.ts`** — substituir bindings Cloudflare por variáveis de ambiente Railway
-2. **Adaptar `src/trading/engine.ts`** — remover dependência de Workers AI, usar OpenRouter/Groq
-3. **Manter `src/trading/risk.ts`** — código puro, zero dependência Cloudflare
-4. **Manter `src/trading/regime.ts`** — código puro, zero dependência Cloudflare
-5. **Adaptar `src/sentiment/llm-sensor.ts`** — trocar Workers AI por fetch HTTP para OpenRouter
-6. **Manter estratégias** — `event-driven.ts` e `market-neutral-filter.ts` são puros
-7. **Substituir D1** por SQLite local ou Turso
-8. **Deploy com `lancar_no_railway`**
-
-### Fase 2 — Integração com Ecossistema (5-7 dias)
-1. Wrappers das ferramentas internas (ScheduleCronTool, WebFetchTool, etc.)
-2. Interface Telegram via SendMessageTool
-3. Dashboard de monitorização
-4. Backtesting com dados históricos
-
-### Fase 3 — Monetização (7-14 dias)
-1. Modo paper-trading para validação
-2. Migração para mainnet com capital mínimo
-3. Canal Telegram de sinais premium
-4. White-label SaaS
+```
+                    ┌─────────────────────────┐
+                    │    NEXUS ORCHESTRATOR    │
+                    │  (Gatekeeper Central)    │
+                    │  Safety → Risk → Kelly   │
+                    └───────────┬─────────────┘
+                                │
+                ┌───────────────┼───────────────┐
+                │               │               │
+        ┌───────▼──────┐ ┌─────▼──────┐ ┌──────▼───────┐
+        │  NexusACP    │ │ NexusRisk  │ │ NexusKelly   │
+        │  Agent       │ │ Engine     │ │ Dynamic      │
+        │  Commerce    │ │ 10-check   │ │ Sizing       │
+        └───────┬──────┘ └─────┬──────┘ └──────┬───────┘
+                │              │               │
+        ┌───────▼──────┐ ┌─────▼──────┐ ┌──────▼───────┐
+        │  Escrow      │ │ VaR +      │ │ Anti-        │
+        │  Contracts   │ │ Stress +   │ │ Martingale   │
+        │  Discovery   │ │ Volatility │ │ Scaling      │
+        └──────────────┘ └────────────┘ └──────────────┘
+                │              │               │
+                └──────────────┼───────────────┘
+                               │
+                    ┌──────────▼──────────┐
+                    │   NEXUS AGENTS      │
+                    │   Subagentes com    │
+                    │   persistência +    │
+                    │   background exec   │
+                    └──────────┬──────────┘
+                               │
+                    ┌──────────▼──────────┐
+                    │   NEXUS EXCHANGES   │
+                    │   Solana + EVM +    │
+                    │   CEX (CCXT)       │
+                    └────────────────────┘
+```
 
 ---
 
-## 7. METADADOS DA CAÇA
+## 6. VIABILIDADE DE LUCRO
 
-- **Data da descoberta:** 2025-07-09
-- **Agente executor:** Cérebro Nexus
-- **Repositório alvo:** loopotv/aria-trading
-- **Repositório de destino:** nexus-arsenal-agentes
-- **Status:** Relatório persistido. Próximo passo: delegar_codificacao para Fase 1.
+### 6.1 Fontes de Receita Autónoma
+
+| Fonte | Potencial Mensal (est.) | Complexidade |
+|-------|------------------------|--------------|
+| Trading autónomo (predição + crypto) | $2K-$20K | Alta |
+| Agent Commerce (vender sinais) | $500-$5K | Média |
+| Copy trading fees | $200-$2K | Baixa |
+| Market making spreads | $1K-$10K | Alta |
+| Staking/Yield (Solana DeFi) | $100-$1K | Baixa |
+
+### 6.2 Custos Operacionais
+
+| Item | Custo Mensal |
+|------|-------------|
+| Anthropic API (Claude) | $100-$500 |
+| Servidor VPS | $20-$100 |
+| RPC nodes (Solana/EVM) | $50-$200 |
+| **Total** | **$170-$800** |
+
+### 6.3 ROI Estimado
+
+- **Cenário conservador:** $500/mês lucro líquido (3-6 meses para break-even)
+- **Cenário moderado:** $3K-$8K/mês lucro líquido
+- **Cenário agressivo:** $15K+/mês lucro líquido (requer capital significativo)
+
+---
+
+## 7. PRÓXIMOS PASSOS (Plano de Ação)
+
+### Fase 1 — Fundação (Semana 1-2)
+- [ ] Fork do CloddsBot e setup do ambiente de desenvolvimento
+- [ ] Implementar NexusACP (adaptar ACP do CloddsBot)
+- [ ] Configurar Risk Engine com VaR + stress testing
+- [ ] Setup de credenciais: Anthropic API, Solana wallet, exchange APIs
+
+### Fase 2 — Motor (Semana 3-4)
+- [ ] Implementar Kelly Criterion dinâmico
+- [ ] Configurar Trading Orchestrator com safety checks
+- [ ] Integrar subagentes com persistência de sessão
+- [ ] Deploy do backend Nexus no Railway
+
+### Fase 3 — Mercados (Semana 5-6)
+- [ ] Conectar Polymarket + Binance como primeiros mercados
+- [ ] Implementar estratégias de predição (prediction markets)
+- [ ] Testar com paper trading por 2 semanas
+
+### Fase 4 — Autonomia (Semana 7-8)
+- [ ] Ativar trading autónomo com limites conservadores
+- [ ] Implementar ACP para comércio de sinais entre agentes
+- [ ] Monitorização 24/7 com alertas
+
+### Fase 5 — Escala (Mês 3+)
+- [ ] Adicionar mais exchanges e mercados
+- [ ] Otimizar estratégias com base em PnL real
+- [ ] Implementar copy trading e market making
+
+---
+
+## 8. RISCOS E MITIGAÇÕES
+
+| Risco | Probabilidade | Impacto | Mitigação |
+|-------|--------------|---------|-----------|
+| Perdas de trading | Alta | Alto | Kelly conservador (quarter), circuit breaker, kill switch |
+| API rate limits | Média | Médio | Backoff exponencial, múltiplos providers |
+| Bug em execução | Média | Alto | Paper trading primeiro, limits conservadores |
+| Custo API Claude | Média | Médio | Cache de respostas, modelo menor para tarefas simples |
+| Regulação | Baixa | Alto | Apenas mercados regulados, compliance checks |
+
+---
+
+## 9. CONCLUSÃO
+
+O **CloddsBot** é o projeto de trading autónomo mais maduro e completo encontrado no GitHub. Com 192⭐, 10.7k clones em 14 dias, e uma arquitetura de produção com 80+ módulos, representa uma base sólida para construir o Nexus v2.
+
+O **diferencial absoluto** é o **Agent Commerce Protocol (ACP)** — a capacidade de agentes negociarem entre si com escrow e contratos. Isto transforma o sistema de um simples bot de trading numa **plataforma de comércio entre agentes**, multiplicando exponencialmente o potencial de receita.
+
+**Recomendação:** Prosseguir imediatamente com a Fase 1. O ROI potencial justifica o investimento de desenvolvimento.
+
+---
+
+*Relatório gerado pelo Operário de Execução — Nexus Arsenal*
+*Operação Caçador Autónomo — 2026-04-27*
