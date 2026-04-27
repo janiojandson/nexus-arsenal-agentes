@@ -21,6 +21,8 @@ import os
 import json
 import time
 import requests
+import sseclient
+import asyncio
 from typing import List, Union, Generator, Iterator, Optional
 from pydantic import BaseModel, Field
 
@@ -89,130 +91,202 @@ class Pipeline:
     def __init__(self) -> None:
         self.name = "Nexus CTO"
         self.valves = self.Valves()
+        self.sse_client_id = None
 
     # -------- ciclo de vida --------
     async def on_startup(self) -> None:
-        print(f"🌉 [Nexus Pipeline] on_startup — alvo: {self.valves.NEXUS_BASE_URL}")
+        print(f"🌉 [Nexus Pipeline] Conectando ao Nexus em {self.valves.NEXUS_BASE_URL}")
+        if not self.valves.USE_STREAM:
+            print("⚠️ [Nexus Pipeline] Modo stream desativado, usando REST síncrono")
 
     async def on_shutdown(self) -> None:
-        print("🌉 [Nexus Pipeline] on_shutdown")
+        print("🔌 [Nexus Pipeline] Desconectando do Nexus")
 
-    # -------- helpers --------
-    def _headers(self) -> dict:
-        h = {"Content-Type": "application/json", "Accept": "text/event-stream"}
-        if self.valves.NEXUS_API_KEY:
-            h["Authorization"] = f"Bearer {self.valves.NEXUS_API_KEY}"
-        h["X-Client-Id"] = self.valves.NEXUS_CLIENT_ID
-        return h
-
-    def _format_event(self, evt: dict) -> str:
-        t = evt.get("type", "status")
-        data = evt.get("data", {})
-        if t == "status":
-            return f"📥 {data.get('msg', '...')}\n"
-        if t == "progress":
-            prov = data.get("provider", "?")
-            model = data.get("model", "?")
-            key = data.get("keyIndex", "?")
-            return f"🧠 Processando via **{model}** @ {prov} (key #{key})\n"
-        if t == "juiz":
-            return f"⚖️ {data.get('msg', 'Juízes avaliando...')}\n"
-        if t == "token":
-            return data.get("text", "")
-        if t == "final":
-            return f"\n\n---\n✅ **Resposta final:**\n\n{data.get('response', '')}\n"
-        if t == "error":
-            return f"\n\n🚨 Erro: `{data.get('error', 'desconhecido')}`\n"
-        return f"ℹ️ {json.dumps(data, ensure_ascii=False)}\n"
-
-    # -------- STREAM SSE --------
-    def _stream_sse(self, prompt: str, system_prompt: str) -> Generator[str, None, None]:
-        url = f"{self.valves.NEXUS_BASE_URL.rstrip('/')}/api/v1/stream-command"
-        payload = {
-            "prompt": prompt,
-            "systemPrompt": system_prompt,
-            "clientId": self.valves.NEXUS_CLIENT_ID,
-        }
-        try:
-            with requests.post(
-                url,
-                headers=self._headers(),
-                json=payload,
-                stream=True,
-                timeout=self.valves.STREAM_TIMEOUT,
-            ) as r:
-                if r.status_code != 200:
-                    yield f"🚨 SSE falhou (HTTP {r.status_code}). Fazendo fallback REST...\n"
-                    yield from self._rest_fallback(prompt, system_prompt)
-                    return
-
-                buffer = ""
-                for raw in r.iter_lines(decode_unicode=True):
-                    if raw is None:
-                        continue
-                    if raw == "":
-                        # fim de evento SSE
-                        if buffer.startswith("data:"):
-                            payload_txt = buffer[5:].strip()
-                            if payload_txt and payload_txt != "[DONE]":
-                                try:
-                                    evt = json.loads(payload_txt)
-                                    yield self._format_event(evt)
-                                except json.JSONDecodeError:
-                                    yield payload_txt + "\n"
-                        buffer = ""
-                    else:
-                        buffer += raw + "\n"
-        except requests.exceptions.RequestException as e:
-            yield f"🚨 Falha de rede no SSE: `{e}`\n"
-            yield from self._rest_fallback(prompt, system_prompt)
-
-    # -------- REST FALLBACK --------
-    def _rest_fallback(self, prompt: str, system_prompt: str) -> Generator[str, None, None]:
-        url = f"{self.valves.NEXUS_BASE_URL.rstrip('/')}/api/v1/command"
-        try:
-            r = requests.post(
-                url,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.valves.NEXUS_API_KEY}"
-                    if self.valves.NEXUS_API_KEY
-                    else "",
-                },
-                json={"prompt": prompt, "systemPrompt": system_prompt},
-                timeout=self.valves.STREAM_TIMEOUT,
-            )
-            if r.ok:
-                data = r.json()
-                yield data.get("response", "(resposta vazia)")
-            else:
-                yield f"🚨 REST falhou: HTTP {r.status_code} — {r.text[:300]}"
-        except Exception as e:
-            yield f"🚨 Falha REST: `{e}`"
-
-    # -------- PIPE (entrypoint do Open WebUI) --------
-    def pipe(
-        self,
-        user_message: str,
-        model_id: str,
-        messages: List[dict],
-        body: dict,
-    ) -> Union[str, Generator, Iterator]:
-        text = (user_message or "").strip()
-
-        # comando local !help
-        if text.lower() in ("!help", "!ajuda", "!comandos"):
+    # -------- processamento --------
+    async def process(
+        self, prompt: str, system_prompt: str = ""
+    ) -> Union[str, Generator[str, None, None]]:
+        """
+        Processa um prompt através do Nexus Engine
+        """
+        # Verificar se é um comando especial
+        if prompt.strip().lower() == "!help":
             return CommandMapping.list_commands()
 
-        # monta system prompt a partir da conversa
-        system_prompt = ""
-        for m in messages:
-            if m.get("role") == "system":
-                system_prompt = m.get("content", "")
-                break
-
-        # escolhe stream ou rest
+        # Usar SSE para streaming em tempo real
         if self.valves.USE_STREAM:
-            return self._stream_sse(text, system_prompt)
+            try:
+                return self._process_stream(prompt, system_prompt)
+            except Exception as e:
+                print(f"❌ [Nexus Pipeline] Erro no stream: {e}")
+                print("⚠️ [Nexus Pipeline] Fallback para REST síncrono")
+                # Fallback para REST síncrono
+                return await self._process_sync(prompt, system_prompt)
         else:
-            return self._rest_fallback(text, system_prompt)
+            # Usar REST síncrono
+            return await self._process_sync(prompt, system_prompt)
+
+    async def _process_sync(self, prompt: str, system_prompt: str) -> str:
+        """
+        Processa um prompt de forma síncrona via REST
+        """
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.valves.NEXUS_API_KEY}",
+        }
+
+        payload = {
+            "prompt": prompt,
+            "system": system_prompt,
+            "client_id": self.valves.NEXUS_CLIENT_ID,
+        }
+
+        url = f"{self.valves.NEXUS_BASE_URL}/api/v1/command"
+        
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=60)
+            response.raise_for_status()
+            result = response.json()
+            return result.get("resposta", "Erro: Resposta vazia do Nexus")
+        except requests.exceptions.RequestException as e:
+            return f"❌ Erro ao conectar com o Nexus: {str(e)}"
+
+    def _process_stream(self, prompt: str, system_prompt: str) -> Generator[str, None, None]:
+        """
+        Processa um prompt via streaming SSE
+        Retorna um gerador que emite tokens incrementalmente
+        """
+        # Estabelecer conexão SSE primeiro
+        if not self.sse_client_id:
+            self._establish_sse_connection()
+        
+        # Enviar comando para processamento via SSE
+        self._send_sse_command(prompt, system_prompt)
+        
+        # Retornar gerador que consome eventos SSE
+        return self._consume_sse_events()
+
+    def _establish_sse_connection(self) -> None:
+        """
+        Estabelece uma conexão SSE com o Nexus
+        """
+        headers = {
+            "Accept": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Authorization": f"Bearer {self.valves.NEXUS_API_KEY}",
+        }
+        
+        url = f"{self.valves.NEXUS_BASE_URL}/api/v1/stream-command"
+        
+        # Iniciar conexão SSE em uma thread separada
+        def connect_sse():
+            try:
+                response = requests.get(url, headers=headers, stream=True)
+                response.raise_for_status()
+                
+                client = sseclient.SSEClient(response)
+                
+                # Esperar pelo evento de conexão para obter o clientId
+                for event in client.events():
+                    if event.event == "conectado":
+                        data = json.loads(event.data)
+                        self.sse_client_id = data.get("clientId")
+                        print(f"🔌 [Nexus Pipeline] Conexão SSE estabelecida, ID: {self.sse_client_id}")
+                        break
+                
+                # Manter a conexão aberta para eventos futuros
+                self.sse_client = client
+                
+            except Exception as e:
+                print(f"❌ [Nexus Pipeline] Erro ao estabelecer conexão SSE: {e}")
+                self.sse_client_id = None
+                raise
+        
+        # Iniciar em uma thread separada
+        import threading
+        thread = threading.Thread(target=connect_sse)
+        thread.daemon = True
+        thread.start()
+        
+        # Esperar até que a conexão seja estabelecida ou timeout
+        timeout = 10
+        start_time = time.time()
+        while not self.sse_client_id and time.time() - start_time < timeout:
+            time.sleep(0.1)
+        
+        if not self.sse_client_id:
+            raise Exception("Timeout ao estabelecer conexão SSE")
+
+    def _send_sse_command(self, prompt: str, system_prompt: str) -> None:
+        """
+        Envia um comando para processamento via SSE
+        """
+        if not self.sse_client_id:
+            raise Exception("Conexão SSE não estabelecida")
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.valves.NEXUS_API_KEY}",
+        }
+        
+        payload = {
+            "prompt": prompt,
+            "system": system_prompt,
+            "clientId": self.sse_client_id,
+        }
+        
+        url = f"{self.valves.NEXUS_BASE_URL}/api/v1/stream-command"
+        
+        try:
+            response = requests.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            print(f"❌ [Nexus Pipeline] Erro ao enviar comando SSE: {e}")
+            raise
+
+    def _consume_sse_events(self) -> Generator[str, None, None]:
+        """
+        Consome eventos SSE e os emite como tokens incrementais
+        """
+        if not hasattr(self, 'sse_client') or not self.sse_client:
+            raise Exception("Cliente SSE não inicializado")
+        
+        # Processar eventos SSE
+        start_time = time.time()
+        timeout = self.valves.STREAM_TIMEOUT
+        
+        try:
+            for event in self.sse_client.events():
+                # Verificar timeout
+                if time.time() - start_time > timeout:
+                    yield "\n\n⏱️ Timeout: Processamento excedeu o limite de tempo"
+                    break
+                
+                # Processar evento
+                if event.event == "resposta":
+                    data = json.loads(event.data)
+                    chunk = data.get("chunk", "")
+                    yield chunk
+                
+                elif event.event == "status":
+                    data = json.loads(event.data)
+                    mensagem = data.get("mensagem", "")
+                    yield f"\n{mensagem}\n"
+                
+                elif event.event == "erro":
+                    data = json.loads(event.data)
+                    mensagem = data.get("mensagem", "")
+                    yield f"\n❌ {mensagem}\n"
+                
+                elif event.event == "concluido":
+                    # Evento de conclusão, encerrar o gerador
+                    break
+                
+                # Ignorar outros eventos (heartbeat, etc)
+        
+        except Exception as e:
+            yield f"\n\n❌ Erro ao processar stream: {str(e)}"
+        
+        finally:
+            # Não fechamos a conexão SSE aqui para permitir reutilização
+            pass
