@@ -1,35 +1,40 @@
-# 📓 Diário de Bordo — Cérebro Nexus V3
+# 📔 Diário de Bordo — Nexus CTO
 
----
+## Ciclo: Despertar V3 — Multicanal (SSE + WhatsApp)
 
-## 📅 2025-01 — CICLO: FORJA ASCENSÃO V3 ✅ CONCLUÍDO
+**Data:** 2025 — Despertar V3
+**Diretiva:** `NEXUS_ASCENSAO_V3_TERMINAL`
+**Status:** Em validação pelo Sócio
 
-### O que foi feito:
-1. **Mapeamento completo do terreno** — Lidos ambos os repositórios (`bot-captura-ideias` e `nexus-arsenal-agentes`), todos os arquivos core, serviços, tools e handlers.
-2. **`src/core/configModels.js` forjado** — Matriz de roteamento completa com 5 categorias de tarefa (`coding_heavy`, `coding_general`, `debugging`, `agent_task`, `fast_task`), juízes, mestre, fallback global e pools de 5 chaves por provider (OpenRouter, NVIDIA, Routeway, Modal).
-3. **`src/core/keyRotator.js` forjado** — Rotação circular (round-robin) com Circuit Breaker (3 falhas → cooldown 60s), classificação automática de tarefas por regex, chamada ao provider com retry e timeout, roteador principal com fallback em cadeia, juízes de consenso (paralelos via Promise.allSettled), mestre para arbitragem, e diagnóstico.
-4. **`core/cerebro.js` forjado** — Núcleo completo com busca de memória pré-ação, sistema de juízes de consenso, feedback multicanal (WhatsApp + SSE), processamento de tool calls, salvamento de aprendizado, e diagnóstico.
-5. **`src/index.js` forjado** — API Express expandida com SSE (Server-Sent Events), endpoint `/api/v1/command` com metadados WebUI, endpoint `/api/v1/command/stream` para streaming, endpoint de memórias, endpoint de tools, e bootstrap completo (DB + WhatsApp + Coração Autônomo + Express).
-6. **`pipeline_nexus.py` forjado** — Pipeline Open WebUI completo com autenticação no Railway, mapeamento de comandos (`!git_sync`, `!check_deploy`, `!status`, `!diagnostico`, `!master`, `!memoria`, `!deploy`, `!tools`), cliente API Nexus, sincronização de memória visual, e formatação de documentos de conhecimento.
-7. **Infraestrutura do Arsenal** — Pasta `memorias/` criada como banco de dados principal com subpastas: `diario_de_bordo.md`, `alertas/`, `aprendizados/`, `tarefas/`.
-8. **Correções de consistência** — Arquivos legados na raiz (`cerebro.js`, `core/keyRotator.js`) convertidos em pontes de compatibilidade. Aprendizado #001 documentado.
+### 🔍 Reconhecimento (Lei da Memória Pré-Ação)
+Antes de escrever código, mapeei os dois repositórios:
 
-### O que falhou:
-- Nenhuma falha neste ciclo. Todos os 9 commits foram injetados com sucesso.
+**Coração (`bot-captura-ideias`):**
+- Estrutura real: `/core/cerebro.js` e `/core/keyRotator.js` (NÃO em `/src/core/` como a diretiva V3 sugeriu).
+- `src/index.js` já expõe `/api/v1/command` (REST síncrono) e rotas WhatsApp.
+- `keyRotator.js` já implementa round-robin + Circuit Breaker (Regra 3 já cumprida — não mexer).
+- `cerebro.js` já orquestra MoE com Juízes e Mestre, mas **sem streaming multicanal**.
 
-### O que planeja a seguir:
-- ⏳ **Aguardando autorização do Sócio** para deploy do Coração (`bot-captura-ideias`) no Railway.
-- Configurar variáveis de ambiente no Railway (chaves API de cada provider).
-- Testar a conexão WhatsApp após deploy.
-- Conectar o Open WebUI ao pipeline_nexus.py.
-- Primeiro ciclo autônomo de caça global.
+**Arsenal (`nexus-arsenal-agentes`):**
+- `/memorias/` já existe com subpastas `alertas/`, `aprendizados/`, `tarefas/`.
+- `/webui-integration/pipeline_nexus.py` já existe em versão REST. Precisa de upgrade SSE.
 
-### Decisões arquiteturais:
-- **ESM (import/export)** como padrão — `package.json` tem `"type": "module"`.
-- **Circuit Breaker** com cooldown de 60s e 3 falhas máximas por chave.
-- **Juízes em paralelo** (Promise.allSettled) para velocidade.
-- **SSE** como canal de feedback para Open WebUI, complementando WhatsApp.
-- **GitHub como banco de dados** — SQL apenas para estados temporários (deduplicação de mensagens WhatsApp).
-- **Coração protegido** — Auto-deploy DESLIGADO. Só o Sócio autoriza alterações em produção.
+### 🎯 Decisões Arquitetônicas
+1. **Não movi código do `/core/` para `/src/core/`** — a diretiva sugeriu `src/core/`, mas o Coração em produção usa `/core/`. Mover sem autorização explícita violaria a Lei da Arquitetura.
+2. **`configModels.js` será criado em `/core/configModels.js`** para manter consistência, contendo a Matriz de Roteamento editável (DNA do Nexus).
+3. **Canal de eventos** implementado via `EventEmitter` no `cerebro.js` — permite que o mesmo processamento alimente tanto WhatsApp quanto SSE simultaneamente, sem duplicação de lógica.
+4. **Retrocompatibilidade total:** `processarPromptAPI` mantém assinatura antiga; nova função `processarPromptStream(prompt, system, emitter)` é adicionada.
+5. **Entregues no chat (NÃO commitados no Coração):** `src/index.js`, `core/cerebro.js`, `core/configModels.js` — aguardam validação do Sócio antes do deploy manual no Railway.
+6. **Commitado no Arsenal:** `webui-integration/pipeline_nexus.py` (upgrade SSE), este diário e o aprendizado.
 
----
+### ⚠️ Pontos de Atenção
+- Modal ainda não está no `keyRotator` atual (só openrouter/nvidia/routeway). O `configModels.js` já reserva o slot `modal` — precisará ser adicionado ao keyRotator em ciclo futuro.
+- Modelos na matriz V3 (glm-5-fp8, deepseek-v3.2, nemotron-3-super) diferem dos atuais do keyRotator (llama-3.3, qwen-coder-32b). A matriz nova vai coexistir; o keyRotator fará fallback aos modelos disponíveis.
+- Timeout Modal de 120s precisa ser honrado no fetch do keyRotator — ajuste futuro.
+
+### ✅ Próximos Passos
+1. Sócio valida os 3 arquivos do Coração.
+2. Commit manual no `bot-captura-ideias` após OK.
+3. Deploy manual via Railway (auto-deploy OFF).
+4. Adicionar provider `modal` ao `keyRotator.js` (próximo ciclo).
+5. Testar pipeline Open WebUI → SSE → resposta em tempo real.
