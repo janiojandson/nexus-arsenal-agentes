@@ -1,82 +1,51 @@
 """
 webui-integration/pipeline_nexus.py
-🌉 NEXUS V3 — PIPELINE OPEN WEBUI
-Transforma intenções do chat em ações de infraestrutura no GitHub e Railway.
+🌉 NEXUS V3 — PIPELINE OPEN WEBUI (SSE Edition)
+
 Compatível com Open WebUI Pipelines.
+Intercepta mensagens do WebUI, envia para o endpoint SSE /api/v1/stream-command
+do Nexus (Railway) e emite os eventos do cérebro em tempo real como tokens
+incrementais no chat.
+
+Fallback para /api/v1/command (REST síncrono) se o stream falhar.
+
+title: Nexus CTO
+author: Nexus (auto)
+version: 3.0.0
+license: MIT
 """
+
+from __future__ import annotations
 
 import os
 import json
+import time
 import requests
-from typing import List, Optional, Generator, AsyncGenerator
-from pydantic import BaseModel
+from typing import List, Union, Generator, Iterator, Optional
+from pydantic import BaseModel, Field
 
 
 # ======================================================
-# 🔗 CONFIGURAÇÃO DA CONEXÃO COM O NEXUS (Railway)
+# 🔗 CONFIGURAÇÃO
 # ======================================================
-NEXUS_BASE_URL = os.environ.get("NEXUS_BASE_URL", "https://nexus-v3.up.railway.app")
-NEXUS_API_KEY = os.environ.get("NEXUS_API_KEY", "")
-NEXUS_CLIENT_ID = os.environ.get("NEXUS_CLIENT_ID", "webui-pipeline")
-
-HEADERS = {
-    "Content-Type": "application/json",
-    "Authorization": f"Bearer {NEXUS_API_KEY}"
-}
+DEFAULT_NEXUS_URL = os.environ.get(
+    "NEXUS_BASE_URL", "https://nexus-v3.up.railway.app"
+)
+DEFAULT_NEXUS_KEY = os.environ.get("NEXUS_API_KEY", "")
 
 
 # ======================================================
-# 📋 SCHEMAS
+# 🧾 COMMAND MAP
 # ======================================================
-class PipelineConfig(BaseModel):
-    nexus_url: str = NEXUS_BASE_URL
-    nexus_api_key: str = NEXUS_API_KEY
-
-
 class CommandMapping:
-    """Mapeia comandos do WebUI para ações do Nexus."""
-    
     COMMANDS = {
-        "!git_sync": {
-            "description": "Sincroniza memórias e código do Arsenal",
-            "action": "git_sync",
-            "task_type": "agent_task"
-        },
-        "!check_deploy": {
-            "description": "Verifica status do deploy no Railway",
-            "action": "check_deploy",
-            "task_type": "fast_task"
-        },
-        "!status": {
-            "description": "Status completo do sistema Nexus",
-            "action": "status",
-            "task_type": "fast_task"
-        },
-        "!diagnostico": {
-            "description": "Diagnóstico detalhado do sistema",
-            "action": "diagnostico",
-            "task_type": "fast_task"
-        },
-        "!master": {
-            "description": "Força uso do modelo Mestre (pago)",
-            "action": "master",
-            "task_type": "coding_heavy"
-        },
-        "!memoria": {
-            "description": "Busca na memória persistente do Nexus",
-            "action": "memoria",
-            "task_type": "fast_task"
-        },
-        "!deploy": {
-            "description": "Executa deploy no Railway",
-            "action": "deploy",
-            "task_type": "agent_task"
-        },
-        "!tools": {
-            "description": "Lista todas as tools disponíveis",
-            "action": "tools",
-            "task_type": "fast_task"
-        }
+        "!status": {"desc": "Status completo do sistema Nexus"},
+        "!diagnostico": {"desc": "Diagnóstico do keyRotator e circuit breakers"},
+        "!master": {"desc": "Força uso do modelo MESTRE (pago) na próxima tarefa"},
+        "!memoria": {"desc": "Busca na memória persistente (GitHub + pgvector)"},
+        "!deploy": {"desc": "Gatilha deploy no Railway"},
+        "!tools": {"desc": "Lista todas as tools disponíveis"},
+        "!help": {"desc": "Mostra este menu"},
     }
 
     @classmethod
@@ -84,271 +53,166 @@ class CommandMapping:
         return text.strip().startswith("!")
 
     @classmethod
-    def get_command(cls, text: str) -> Optional[dict]:
-        cmd = text.strip().split(" ")[0].lower()
-        return cls.COMMANDS.get(cmd)
-
-    @classmethod
     def list_commands(cls) -> str:
         lines = ["📋 **Comandos Disponíveis:**\n"]
         for cmd, info in cls.COMMANDS.items():
-            lines.append(f"  • `{cmd}` — {info['description']}")
+            lines.append(f"  • `{cmd}` — {info['desc']}")
         return "\n".join(lines)
 
 
 # ======================================================
-# 🌉 CLIENTE DA API NEXUS
-# ======================================================
-class NexusClient:
-    """Cliente para comunicação com o Nexus no Railway."""
-
-    def __init__(self, base_url: str = NEXUS_BASE_URL, api_key: str = NEXUS_API_KEY):
-        self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
-        self.headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
-        }
-
-    def _request(self, method: str, endpoint: str, data: dict = None) -> dict:
-        url = f"{self.base_url}{endpoint}"
-        try:
-            response = requests.request(
-                method=method,
-                url=url,
-                json=data,
-                headers=self.headers,
-                timeout=120
-            )
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.Timeout:
-            return {"type": "error", "error": "Timeout ao conectar com o Nexus. O modelo pode estar processando (Modal tem alta latência)."}
-        except requests.exceptions.ConnectionError:
-            return {"type": "error", "error": "Nexus offline. Verifique o deploy no Railway."}
-        except requests.exceptions.HTTPError as e:
-            return {"type": "error", "error": f"Erro HTTP {e.response.status_code}: {e.response.text[:200]}"}
-        except Exception as e:
-            return {"type": "error", "error": str(e)}
-
-    def send_command(self, command: str, task_type: str = None, metadata: dict = None) -> dict:
-        payload = {
-            "command": command,
-            "clientId": NEXUS_CLIENT_ID,
-            "taskType": task_type,
-            "metadata": metadata or {}
-        }
-        return self._request("POST", "/api/v1/command", payload)
-
-    def send_command_stream(self, command: str, task_type: str = None, metadata: dict = None):
-        """Envia comando e recebe resposta via SSE stream."""
-        payload = {
-            "command": command,
-            "taskType": task_type,
-            "metadata": metadata or {}
-        }
-        url = f"{self.base_url}/api/v1/command/stream"
-        try:
-            response = requests.post(
-                url,
-                json=payload,
-                headers=self.headers,
-                stream=True,
-                timeout=120
-            )
-            response.raise_for_status()
-            for line in response.iter_lines():
-                if line:
-                    line = line.decode("utf-8")
-                    if line.startswith("data: "):
-                        try:
-                            data = json.loads(line[6:])
-                            yield data
-                        except json.JSONDecodeError:
-                            continue
-        except Exception as e:
-            yield {"type": "error", "error": str(e)}
-
-    def get_status(self) -> dict:
-        return self._request("GET", "/api/v1/status")
-
-    def get_diagnostico(self) -> dict:
-        return self._request("GET", "/api/v1/diagnostico")
-
-    def get_tools(self) -> dict:
-        return self._request("GET", "/api/v1/tools")
-
-    def search_memory(self, query: str, limit: int = 5) -> dict:
-        return self._request("GET", f"/api/v1/memorias?query={query}&limite={limit}")
-
-
-# ======================================================
-# 🔧 PIPELINE PRINCIPAL (Open WebUI Compatible)
+# 🚀 PIPELINE
 # ======================================================
 class Pipeline:
-    """Pipeline Nexus para Open WebUI — Transforma chat em infraestrutura."""
+    class Valves(BaseModel):
+        NEXUS_BASE_URL: str = Field(
+            default=DEFAULT_NEXUS_URL,
+            description="URL base do Nexus (Railway)",
+        )
+        NEXUS_API_KEY: str = Field(
+            default=DEFAULT_NEXUS_KEY,
+            description="API Key do Nexus (Bearer)",
+        )
+        NEXUS_CLIENT_ID: str = Field(
+            default="webui-pipeline",
+            description="Identificador do cliente WebUI",
+        )
+        STREAM_TIMEOUT: int = Field(
+            default=180,
+            description="Timeout total do stream em segundos",
+        )
+        USE_STREAM: bool = Field(
+            default=True,
+            description="Se False, usa REST síncrono /api/v1/command",
+        )
 
-    def __init__(self):
-        self.name = "Nexus V3 Pipeline"
-        self.client = NexusClient()
-        self.command_mapping = CommandMapping()
+    def __init__(self) -> None:
+        self.name = "Nexus CTO"
+        self.valves = self.Valves()
 
-    async def on_startup(self):
-        print(f"🚀 [Nexus Pipeline] Inicializado. Conectando a {self.client.base_url}")
-        status = self.client.get_status()
-        if status.get("status") == "OPERACIONAL":
-            print("✅ [Nexus Pipeline] Conexão com Nexus estabelecida.")
-        else:
-            print(f"⚠️ [Nexus Pipeline] Nexus pode estar offline: {status}")
+    # -------- ciclo de vida --------
+    async def on_startup(self) -> None:
+        print(f"🌉 [Nexus Pipeline] on_startup — alvo: {self.valves.NEXUS_BASE_URL}")
 
-    async def on_shutdown(self):
-        print("👋 [Nexus Pipeline] Desligando...")
+    async def on_shutdown(self) -> None:
+        print("🌉 [Nexus Pipeline] on_shutdown")
 
-    async def pipe(
+    # -------- helpers --------
+    def _headers(self) -> dict:
+        h = {"Content-Type": "application/json", "Accept": "text/event-stream"}
+        if self.valves.NEXUS_API_KEY:
+            h["Authorization"] = f"Bearer {self.valves.NEXUS_API_KEY}"
+        h["X-Client-Id"] = self.valves.NEXUS_CLIENT_ID
+        return h
+
+    def _format_event(self, evt: dict) -> str:
+        t = evt.get("type", "status")
+        data = evt.get("data", {})
+        if t == "status":
+            return f"📥 {data.get('msg', '...')}\n"
+        if t == "progress":
+            prov = data.get("provider", "?")
+            model = data.get("model", "?")
+            key = data.get("keyIndex", "?")
+            return f"🧠 Processando via **{model}** @ {prov} (key #{key})\n"
+        if t == "juiz":
+            return f"⚖️ {data.get('msg', 'Juízes avaliando...')}\n"
+        if t == "token":
+            return data.get("text", "")
+        if t == "final":
+            return f"\n\n---\n✅ **Resposta final:**\n\n{data.get('response', '')}\n"
+        if t == "error":
+            return f"\n\n🚨 Erro: `{data.get('error', 'desconhecido')}`\n"
+        return f"ℹ️ {json.dumps(data, ensure_ascii=False)}\n"
+
+    # -------- STREAM SSE --------
+    def _stream_sse(self, prompt: str, system_prompt: str) -> Generator[str, None, None]:
+        url = f"{self.valves.NEXUS_BASE_URL.rstrip('/')}/api/v1/stream-command"
+        payload = {
+            "prompt": prompt,
+            "systemPrompt": system_prompt,
+            "clientId": self.valves.NEXUS_CLIENT_ID,
+        }
+        try:
+            with requests.post(
+                url,
+                headers=self._headers(),
+                json=payload,
+                stream=True,
+                timeout=self.valves.STREAM_TIMEOUT,
+            ) as r:
+                if r.status_code != 200:
+                    yield f"🚨 SSE falhou (HTTP {r.status_code}). Fazendo fallback REST...\n"
+                    yield from self._rest_fallback(prompt, system_prompt)
+                    return
+
+                buffer = ""
+                for raw in r.iter_lines(decode_unicode=True):
+                    if raw is None:
+                        continue
+                    if raw == "":
+                        # fim de evento SSE
+                        if buffer.startswith("data:"):
+                            payload_txt = buffer[5:].strip()
+                            if payload_txt and payload_txt != "[DONE]":
+                                try:
+                                    evt = json.loads(payload_txt)
+                                    yield self._format_event(evt)
+                                except json.JSONDecodeError:
+                                    yield payload_txt + "\n"
+                        buffer = ""
+                    else:
+                        buffer += raw + "\n"
+        except requests.exceptions.RequestException as e:
+            yield f"🚨 Falha de rede no SSE: `{e}`\n"
+            yield from self._rest_fallback(prompt, system_prompt)
+
+    # -------- REST FALLBACK --------
+    def _rest_fallback(self, prompt: str, system_prompt: str) -> Generator[str, None, None]:
+        url = f"{self.valves.NEXUS_BASE_URL.rstrip('/')}/api/v1/command"
+        try:
+            r = requests.post(
+                url,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.valves.NEXUS_API_KEY}"
+                    if self.valves.NEXUS_API_KEY
+                    else "",
+                },
+                json={"prompt": prompt, "systemPrompt": system_prompt},
+                timeout=self.valves.STREAM_TIMEOUT,
+            )
+            if r.ok:
+                data = r.json()
+                yield data.get("response", "(resposta vazia)")
+            else:
+                yield f"🚨 REST falhou: HTTP {r.status_code} — {r.text[:300]}"
+        except Exception as e:
+            yield f"🚨 Falha REST: `{e}`"
+
+    # -------- PIPE (entrypoint do Open WebUI) --------
+    def pipe(
         self,
         user_message: str,
         model_id: str,
         messages: List[dict],
-        body: dict
-    ) -> AsyncGenerator[str, None]:
-        """
-        Processa mensagem do usuário. Se for comando, executa ação.
-        Se for pergunta normal, roteia pelo Nexus.
-        """
-        text = user_message.strip()
+        body: dict,
+    ) -> Union[str, Generator, Iterator]:
+        text = (user_message or "").strip()
 
-        # Verificar se é um comando especial
-        if self.command_mapping.is_command(text):
-            cmd_info = self.command_mapping.get_command(text)
-            if cmd_info:
-                yield from self._execute_command(cmd_info, text)
-                return
-            else:
-                yield f"❌ Comando não reconhecido.\n\n{self.command_mapping.list_commands()}"
-                return
+        # comando local !help
+        if text.lower() in ("!help", "!ajuda", "!comandos"):
+            return CommandMapping.list_commands()
 
-        # Verificar se é pergunta sobre memória
-        if any(kw in text.lower() for kw in ["memória", "memoria", "lembra", "já fizemos", "histórico"]):
-            memory_result = self.client.search_memory(text)
-            if memory_result.get("data"):
-                context = memory_result["data"]
-                # Envia com contexto de memória
-                result = self.client.send_command(
-                    f"[CONTEXTO DE MEMÓRIA]: {context}\n\n[PERGUNTA]: {text}",
-                    task_type="fast_task"
-                )
-            else:
-                result = self.client.send_command(text)
+        # monta system prompt a partir da conversa
+        system_prompt = ""
+        for m in messages:
+            if m.get("role") == "system":
+                system_prompt = m.get("content", "")
+                break
+
+        # escolhe stream ou rest
+        if self.valves.USE_STREAM:
+            return self._stream_sse(text, system_prompt)
         else:
-            # Roteamento normal pelo Nexus
-            result = self.client.send_command(text)
-
-        if result.get("type") == "error":
-            yield f"🚨 Erro: {result['error']}"
-        elif result.get("data"):
-            data = result["data"]
-            if isinstance(data, dict) and data.get("content"):
-                yield data["content"]
-            else:
-                yield json.dumps(data, indent=2, ensure_ascii=False)
-        else:
-            yield str(result)
-
-    def _execute_command(self, cmd_info: dict, full_text: str) -> Generator[str, None, None]:
-        """Executa um comando mapeado."""
-        action = cmd_info["action"]
-        args = full_text.split(" ", 1)[1] if " " in full_text else ""
-
-        if action == "status":
-            result = self.client.get_status()
-            yield f"📊 **Status do Nexus:**\n```json\n{json.dumps(result, indent=2, ensure_ascii=False)}\n```"
-
-        elif action == "diagnostico":
-            result = self.client.get_diagnostico()
-            yield f"🔍 **Diagnóstico Completo:**\n```json\n{json.dumps(result, indent=2, ensure_ascii=False)}\n```"
-
-        elif action == "tools":
-            result = self.client.get_tools()
-            tools = result.get("data", [])
-            lines = ["🔧 **Tools Disponíveis:**\n"]
-            for tool in tools:
-                fn = tool.get("function", {})
-                lines.append(f"  • `{fn.get('name')}` — {fn.get('description')}")
-            yield "\n".join(lines)
-
-        elif action == "memoria":
-            if not args:
-                yield "🔍 Use: `!memoria [termo de busca]`"
-                return
-            result = self.client.search_memory(args)
-            if result.get("data"):
-                yield f"🧠 **Memórias encontradas:**\n\n{result['data']}"
-            else:
-                yield "📭 Nenhuma memória encontrada para este termo."
-
-        elif action == "master":
-            result = self.client.send_command(
-                args or "Mestre invocado. Às ordens.",
-                task_type="coding_heavy",
-                metadata={"useMaster": True}
-            )
-            if result.get("data", {}).get("content"):
-                yield result["data"]["content"]
-            else:
-                yield json.dumps(result, indent=2, ensure_ascii=False)
-
-        elif action == "git_sync":
-            yield "🔄 Sincronizando memórias do Arsenal..."
-            result = self.client.send_command("!git_sync", task_type="agent_task")
-            yield f"✅ Sincronização concluída:\n{json.dumps(result, indent=2, ensure_ascii=False)}"
-
-        elif action == "check_deploy":
-            result = self.client.get_status()
-            yield f"🚀 **Status do Deploy:**\n```json\n{json.dumps(result, indent=2, ensure_ascii=False)}\n```"
-
-        elif action == "deploy":
-            yield "🚀 Iniciando deploy no Railway..."
-            result = self.client.send_command("!deploy", task_type="agent_task")
-            yield f"✅ Deploy iniciado:\n{json.dumps(result, indent=2, ensure_ascii=False)}"
-
-        else:
-            yield f"❌ Ação não implementada: {action}"
-
-
-# ======================================================
-# 📚 SINCRONIZAÇÃO DE MEMÓRIA VISUAL
-# ======================================================
-def formatar_diario_para_webui(diario_markdown: str) -> dict:
-    """
-    Formata o Diário de Bordo (Markdown do GitHub) para ser exibido
-    como 'Documento de Conhecimento' no Open WebUI.
-    """
-    return {
-        "title": "📓 Diário de Bordo — Nexus V3",
-        "content": diario_markdown,
-        "type": "knowledge_document",
-        "source": "github://nexus-arsenal-agentes/memorias/diario_de_bordo.md",
-        "timestamp": __import__("datetime").datetime.now().isoformat()
-    }
-
-
-def formatar_alertas_para_webui(alertas: list) -> dict:
-    """Formata alertas de instabilidade para exibição no WebUI."""
-    return {
-        "title": "🚨 Alertas de Instabilidade — Modelos",
-        "content": json.dumps(alertas, indent=2, ensure_ascii=False),
-        "type": "alert_document",
-        "source": "github://nexus-arsenal-agentes/memorias/alertas/"
-    }
-
-
-# ======================================================
-# 🏁 EXPORTS
-# ======================================================
-__all__ = [
-    "Pipeline",
-    "NexusClient",
-    "CommandMapping",
-    "formatar_diario_para_webui",
-    "formatar_alertas_para_webui"
-]
+            return self._rest_fallback(text, system_prompt)
