@@ -32,9 +32,52 @@ Antes de escrever código, mapeei os dois repositórios:
 - Modelos na matriz V3 (glm-5-fp8, deepseek-v3.2, nemotron-3-super) diferem dos atuais do keyRotator (llama-3.3, qwen-coder-32b). A matriz nova vai coexistir; o keyRotator fará fallback aos modelos disponíveis.
 - Timeout Modal de 120s precisa ser honrado no fetch do keyRotator — ajuste futuro.
 
+### 🛠️ Implementações Realizadas
+1. **`backend/core/configModels.js`** - Criado com a matriz de roteamento e classificação de tarefas
+   - Implementa a classificação de tarefas em 5 categorias: coding_heavy, coding_general, debugging, agent_task, fast_task
+   - Define a matriz de roteamento com prioridades para cada tipo de tarefa
+   - Configura o sistema de juízes e o modelo mestre
+
+2. **`backend/core/cerebro.js`** - Implementado com suporte multicanal
+   - Usa EventEmitter para streaming em tempo real
+   - Mantém compatibilidade com a API REST síncrona
+   - Implementa o sistema de juízes e consenso para decisões críticas
+   - Integra com o keyRotator para rotação de chaves
+
+3. **`backend/src/index.js`** - Implementado com suporte a SSE
+   - Expõe rota `/api/v1/stream-command` para Server-Sent Events
+   - Mantém compatibilidade com a rota REST `/api/v1/command`
+   - Implementa webhook para WhatsApp com o mesmo processamento
+   - Gerencia conexões SSE ativas com heartbeat
+
+4. **`webui-integration/pipeline_nexus.py`** - Atualizado para suportar SSE
+   - Conecta ao endpoint SSE do Nexus
+   - Processa eventos em tempo real
+   - Mantém fallback para REST síncrono
+   - Implementa comandos especiais (!help, !status, etc.)
+
 ### ✅ Próximos Passos
 1. Sócio valida os 3 arquivos do Coração.
 2. Commit manual no `bot-captura-ideias` após OK.
 3. Deploy manual via Railway (auto-deploy OFF).
 4. Adicionar provider `modal` ao `keyRotator.js` (próximo ciclo).
 5. Testar pipeline Open WebUI → SSE → resposta em tempo real.
+
+## Ciclo: Implementação Inicial
+
+**Data:** 2024-05-15
+**Status:** Concluído
+
+### 🔍 Reconhecimento
+Mapeamento inicial dos repositórios e estrutura de código.
+
+### 🎯 Decisões Arquitetônicas
+Definição da estrutura base do projeto e fluxo de trabalho.
+
+### 🛠️ Implementações Realizadas
+1. Estrutura inicial do repositório
+2. Primeiras versões do cerebro.js e keyRotator.js
+3. Configuração básica do Express
+
+### ✅ Próximos Passos
+Evolução para suporte multicanal (realizado no ciclo atual).
